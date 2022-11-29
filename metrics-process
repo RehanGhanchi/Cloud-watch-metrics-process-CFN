@@ -1,0 +1,689 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This cloudFormation will create the resources used in PasswordResetBot app in slack.
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: IAM Permission Boundary Configuration
+        Parameters:
+          - IAMPermissionsBoundaryPolicyARN
+    ParameterLabels:
+      IAMPermissionsBoundaryPolicyARN:
+        default: Policy ARN of the IAM Permissions Boundary (Optional)
+      NamespaceFilter:
+        default: "Select Namespaces to collect AWS CloudWatch Metrics from"
+      DomainEndpointURL:
+        default: "Select opensearch endpoint URL"
+Conditions:
+  HasIAMPermissionsBoundary: !Not 
+    - !Equals 
+      - !Ref IAMPermissionsBoundaryPolicyARN
+      - ''
+Parameters:
+  DomainEndpoint: 
+    Type: String
+    Description: Opensearch domain endpoint
+    Default: 'search-us-east-1-aos-st5ssoi4tsgmcczbnhobw4cpwq.us-east-1.es.amazonaws.com'
+  IAMPermissionsBoundaryPolicyARN:
+    Type: String
+    Description: The ARN of the policy used to set the permissions boundary for the IAM roles which will be created in this CFN.
+    Default: ''
+  OpensearchDomainARN:
+    Type: String
+    Description: The ARN of the Opensearch Domain where logs will be pushed.
+    Default: ''
+  NamespaceFilter:
+    Default: ""
+    Description: "Enter in a comma-delimited list of namespaces which you want to collect AWS CloudWatch metrics from. Example: AWS/ELB, AWS/DynamoDB .... (give a list of all the ones we support). To collect all namespaces simply leave this field blank; this is the default value."
+    Type: String
+  DomainEndpointURL:
+    Type: String
+    Description: The EndPoint URL of the Opensearch Domain where logs will be pushed.
+    Default: ''    
+Resources:
+  KinesisFailedBucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      BucketName: !Sub kinesisfailedbucket-${AWS::Region}-aos
+      Tags: 
+        - Key: "Application"
+          Value: "AOS"
+        - Key: "Environment"
+          Value: "dev"
+        - Key: "GP Project"
+          Value: "265988.0"
+  KinesisFirehoseRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      Description: IAM role for kinesis firehose
+      RoleName: !Sub ${AWS::Region}-kinesisFirehose1-aos
+      Tags: 
+        - Key: "Application"
+          Value: "AOS"
+        - Key: "Environment"
+          Value: "dev"
+        - Key: "GP Project"
+          Value: "265988.0"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: firehose.amazonaws.com
+          Action: sts:AssumeRole
+        - Sid: trustbetweencwnfirehose
+          Effect: Allow
+          Principal:
+            Service: streams.metrics.cloudwatch.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      PermissionsBoundary: !If [HasIAMPermissionsBoundary, !Ref IAMPermissionsBoundaryPolicyARN, !Ref AWS::NoValue]
+      Policies:
+        - PolicyName: !Sub AOS-CWmetric-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Sid: VisualEditor0
+              Effect: Allow
+              Action:
+              - ec2:CreateNetworkInterface
+              - ec2:DescribeNetworkInterfaces
+              - ec2:CreateNetworkInterfacePermission
+              - ec2:DescribeVpcs
+              - ec2:DeleteNetworkInterface
+              - ec2:DescribeSubnets
+              - ec2:DescribeVpcAttribute
+              - ec2:DescribeSecurityGroups
+              Resource: "*"
+            - Sid: VisualEditor1
+              Effect: Allow
+              Action: es:ESHttpGet
+              Resource:
+              - !Join
+                - ''
+                - - !Ref OpensearchDomainARN
+                  - '/_all/_settings'
+              - !Join
+                - ''
+                - - !Ref OpensearchDomainARN
+                  - '/_cluster/stats'
+              - !Join
+                - ''
+                - - !Ref OpensearchDomainARN
+                  - '/aos-cloudwatch-metric/_mapping/%FIREHOSE_POLICY_TEMPLATE_PLACEHOLDER%'
+              - !Join
+                - ''
+                - - !Ref OpensearchDomainARN
+                  - '/_nodes'
+              - !Join
+                - ''
+                - - !Ref OpensearchDomainARN
+                  - '/_nodes/*/stats'
+              - !Join
+                - ''
+                - - !Ref OpensearchDomainARN
+                  - '/_stats'
+              - !Join
+                - ''
+                - - !Ref OpensearchDomainARN
+                  - '/aos-cloudwatch-metric/_stats'
+            - Sid: VisualEditor2
+              Effect: Allow
+              Action:
+              - s3:ListBucketMultipartUploads
+              - lambda:InvokeFunction
+              - kinesis:GetShardIterator
+              - kinesis:DescribeStream
+              - lambda:GetFunctionConfiguration
+              - s3:ListBucket
+              - es:DescribeElasticsearchDomainConfig
+              - logs:PutLogEvents
+              - s3:PutObject
+              - s3:GetObject
+              - s3:AbortMultipartUpload
+              - es:DescribeElasticsearchDomain
+              - es:ESHttpPost
+              - kinesis:GetRecords
+              - es:DescribeElasticsearchDomains
+              - s3:GetBucketLocation
+              - es:ESHttpPut
+              Resource:
+              - !Ref OpensearchDomainARN
+              - !Join
+                - ''
+                - - !Ref OpensearchDomainARN
+                  - '/*'
+              - !GetAtt KinesisFailedBucket.Arn
+              - !Join
+                - ''
+                - - !GetAtt KinesisFailedBucket.Arn
+                  - '/*'
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:%FIREHOSE_POLICY_TEMPLATE_PLACEHOLDER%:log-stream:*
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/aos-firehose-cwmetric:log-stream:*         
+            - Sid: VisualEditor3
+              Effect: Allow
+              Action: 
+              - kms:Decrypt
+              - kms:GenerateDataKey
+              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/%FIREHOSE_POLICY_TEMPLATE_PLACEHOLDER%
+              Condition:
+                StringEquals:
+                  kms:ViaService: 's3.us-east-1.amazonaws.com'
+                StringLike:
+                  kms:EncryptionContext:aws:s3:arn:
+                  - arn:aws:s3:::%FIREHOSE_POLICY_TEMPLATE_PLACEHOLDER%/*
+                  - arn:aws:s3:::%FIREHOSE_POLICY_TEMPLATE_PLACEHOLDER%
+            - Sid: VisualEditor4
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/%FIREHOSE_POLICY_TEMPLATE_PLACEHOLDER%
+              Condition:
+                StringEquals:
+                  kms:ViaService: 'kinesis.us-east-1.amazonaws.com'
+                StringLike:
+                  kms:EncryptionContext:aws:kinesis:arn: !Sub arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/%FIREHOSE_POLICY_TEMPLATE_PLACEHOLDER%
+            - Sid: VisualEditor5
+              Effect: Allow
+              Action: kinesis:ListShards
+              Resource: 
+              - !Join
+                - ''
+                - - 'arn:'
+                  - !Ref AWS::Partition
+                  - ':kinesis:*:'
+                  - !Ref AWS::AccountId
+                  - ':document/'
+                  - !Sub AOS-delivery-${AWS::Region}-aos
+  KinesisDeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    DependsOn:
+      - KinesisFailedBucket
+      - KinesisFirehoseRole
+    Properties: 
+      AmazonopensearchserviceDestinationConfiguration:
+        CloudWatchLoggingOptions: 
+          Enabled: True
+          LogGroupName: Kinesis-deliverystream
+          LogStreamName: Kinesis-cloudwatch
+        BufferingHints:
+          IntervalInSeconds: 60
+          SizeInMBs: 1
+        DomainARN: !Ref OpensearchDomainARN
+        IndexName: aos-ccloudwatch-metric
+        IndexRotationPeriod: NoRotation
+        ProcessingConfiguration:
+          Enabled: true
+          Processors:
+          - Parameters: 
+              - ParameterName: LambdaArn 
+                ParameterValue:  !GetAtt CWMetricLambda.Arn
+            Type: Lambda
+        RoleARN: !GetAtt KinesisFirehoseRole.Arn
+        S3BackupMode: FailedDocumentsOnly
+        S3Configuration: 
+          BucketARN: !GetAtt KinesisFailedBucket.Arn
+          RoleARN: !GetAtt KinesisFirehoseRole.Arn       
+      DeliveryStreamName: !Sub AOS-delivery-${AWS::Region}-aos
+      DeliveryStreamType: DirectPut
+      Tags: 
+        - Key: "Application"
+          Value: "AOS"
+        - Key: "Environment"
+          Value: "dev"
+        - Key: "GP Project"
+          Value: "265988.0"
+  CWKInesisRole:
+    Type: AWS::IAM::Role
+    DependsOn: 
+      - KinesisDeliveryStream
+    Properties: 
+      Description: IAM role for Lambda Function
+      RoleName: !Sub ${AWS::Region}-AoslambdaExecuton-aos
+      Tags: 
+        - Key: "Application"
+          Value: !Sub Application
+      AssumeRolePolicyDocument:
+        Version: '2008-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: logs.us-east-1.amazonaws.com
+          Action: sts:AssumeRole
+        - Sid: "trustbetweencwnfirehose"
+          Effect: Allow
+          Principal:
+            Service: streams.metrics.cloudwatch.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      PermissionsBoundary: !If [HasIAMPermissionsBoundary, !Ref IAMPermissionsBoundaryPolicyARN, !Ref AWS::NoValue]
+      Policies:
+        - PolicyName: !Sub AOS-CWmetric-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Sid: "VisualEditor0"
+              Effect: Allow
+              Action:
+              - firehose:PutRecord
+              - firehose:PutRecordBatch
+              Resource: 
+              - !GetAtt KinesisDeliveryStream.Arn
+  AOSCloudwatchMetricStream:
+    Type: AWS::CloudWatch::MetricStream 
+    DependsOn: 
+    - KinesisDeliveryStream
+    - CWKInesisRole
+    Properties: 
+      FirehoseArn: !GetAtt KinesisDeliveryStream.Arn
+      Name: AOS-CWmetric
+      OutputFormat: json
+      RoleArn: !GetAtt CWKInesisRole.Arn
+      IncludeFilters:
+        - Namespace: !Ref NamespaceFilter
+      Tags: 
+        - Key: "Application"
+          Value: "AOS"
+        - Key: "Environment"
+          Value: "dev"
+        - Key: "GP Project"
+          Value: "265988.0"
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      Description: IAM role for Lambda Function
+      RoleName: !Sub ${AWS::Region}-AoslambdaExecuton
+      Tags: 
+        - Key: "Application"
+          Value: !Sub Application
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ssm.amazonaws.com
+            - lambda.amazonaws.com
+          Action: sts:AssumeRole
+        - Effect: Allow
+          Principal:
+            Service: firehose.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      PermissionsBoundary: !If [HasIAMPermissionsBoundary, !Ref IAMPermissionsBoundaryPolicyARN, !Ref AWS::NoValue]
+      Policies:
+        - PolicyName: !Sub AOS-CWmetric-${AWS::Region}
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Sid: "CWmetric0"
+              Effect: Allow
+              Action:
+              - es:DeleteOutboundConnection
+              - es:DeletePackage
+              - es:ListElasticsearchInstanceTypeDetails
+              - es:ListDomainsForPackage
+              - es:ListInstanceTypeDetails
+              - es:AcceptInboundConnection
+              - es:DeleteElasticsearchServiceRole
+              - es:DescribeInboundConnections
+              - es:DescribeOutboundConnections
+              - es:DescribeReservedInstances
+              - es:AcceptInboundCrossClusterSearchConnection
+              - es:DescribeReservedInstanceOfferings
+              - es:DescribeInstanceTypeLimits
+              - es:DeleteInboundCrossClusterSearchConnection
+              - es:DescribeOutboundCrossClusterSearchConnections
+              - es:DeleteOutboundCrossClusterSearchConnection
+              - es:DescribeReservedElasticsearchInstanceOfferings
+              - es:CreateServiceRole
+              - es:CreateElasticsearchServiceRole
+              - es:UpdatePackage
+              - es:RejectInboundCrossClusterSearchConnection
+              - es:DeleteInboundConnection
+              - es:GetPackageVersionHistory
+              - es:RejectInboundConnection
+              - es:PurchaseReservedElasticsearchInstanceOffering
+              - es:DescribeInboundCrossClusterSearchConnections
+              - es:ListVersions
+              - es:DescribeReservedElasticsearchInstances
+              - es:ListDomainNames
+              - es:PurchaseReservedInstanceOffering
+              - es:CreatePackage
+              - es:DescribePackages
+              - es:ListElasticsearchInstanceTypes
+              - es:ListElasticsearchVersions
+              - es:DescribeElasticsearchInstanceTypeLimits
+              Resource: "*"
+            - Sid: "CWmetric1"
+              Effect: Allow
+              Action: es:*
+              Resource:
+              - !Sub arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${AWS::Region}-aos
+              - !Sub arn:aws:es:ap-southeast-2:${AWS::AccountId}:domain/ap-southeast-2-aos
+              - !Sub arn:aws:es:us-west-1:${AWS::AccountId}:domain/us-west-1-aos
+              - !Sub arn:aws:es:us-east-1:${AWS::AccountId}:domain/us-east-1-aos
+            - Action:
+              - logs:*
+              Effect: Allow
+              Resource: "*" 
+  CWMetricLambda:
+    Type: AWS::Lambda::Function
+    Properties: 
+      Environment: 
+        Variables:
+          endpoint: !Ref DomainEndpoint
+      Code: 
+        ZipFile: !Sub |      
+          // v1.1.2
+          var https = require('https');
+          var crypto = require('crypto');
+
+          var endpoint = process.env.endpoint;
+
+          // Set this to true if you want to debug why data isn't making it to
+          // your Elasticsearch cluster. This will enable logging of failed items
+          // to CloudWatch Logs.
+          var logFailedResponses = true;
+
+          exports.handler = function(input, context) {
+              // decode input from base64
+              //var zippedInput = new Buffer.from(input.awslogs.data, 'base64');
+              console.log(input)
+          // read the inputs.
+                  var elasticsearchBulkData = transform(input.records);
+                  console.log(elasticsearchBulkData);
+                  // skip control messages
+                  if (!elasticsearchBulkData) {
+                      //console.log('Received a control message');
+                      context.succeed('Control message handled successfully');
+                      return;
+                  }
+
+                  // post documents to the Amazon Elasticsearch Service
+                  post(elasticsearchBulkData, function(error, success, statusCode, failedItems) {
+                      console.log('Response: ' + JSON.stringify({
+                          "statusCode": statusCode
+                      }));
+
+                      if (error) {
+                          logFailure(error, failedItems);
+                          context.fail(JSON.stringify(error));
+                      } else {
+                          console.log('Success: ' + JSON.stringify(success));
+                          context.succeed('Success');
+                      }
+                  });
+          };
+
+          function transform(payload) {
+              
+              var bulkRequestBody = '';
+              console.log(payload)
+              payload.forEach(function(logEvent) {
+                  
+                // console.log(logEvent);
+                  var timestamp = new Date(1 * logEvent.approximateArrivalTimestamp);
+                  var customer;
+                  var indexName;
+                  var buff = new Buffer.from(logEvent.data, 'base64');
+                  var data = buff.toString('ascii');
+                  var metricdata=lines(data);
+              //   console.log(temp)
+                  console.log("metric data is");
+                  console.log(metricdata);
+                  console.log("payload of data is");
+                  console.log(payload);
+                  metricdata.forEach(function(metricevent){
+                  //console.log(metricevent);
+                try
+                {
+                  var metrics = JSON.parse(metricevent);
+                        // index name format: cwl-YYYY.MM.DD.loggroup
+
+              
+                  //console.log(indexName)
+                  //console.log(metrics.dimensions.process_name);
+                  //var indexName= [metricevent.metric_stream_name]
+                  var source = buildSource(logEvent.data, logEvent.extractedFields);
+                  //source['@id'] = logEvent.recordId;
+                  source['timestamp'] = new Date(1 * metrics.timestamp).toISOString();
+                  source['message'] = metrics;
+                  source['owner'] = metrics.account_id;
+                  //source['MetricName'] = metrics.metric_name.split(" ").join("");
+                  //console.log(metrics.metric_name.split(" ").join(""));
+                  source['NameSpace'] = metrics.namespace.toLowerCase().split('/').join('-');
+                  //source['MetricValue'] = metrics.value;
+                  customer=metrics.namespace.split("/");
+                  source['Customer_name']=customer[5];
+                  source['PlatformType']=customer[7];
+                  source['Environment']=customer[6];
+                  //source['host']=metrics.dimensions.host;
+                  //source['log_type']='cloudwatch-metrics';
+                  source['process'] = metrics.dimensions.process_name;
+                  source['instanceId'] = metrics.dimensions.InstanceId;
+                  source['hostname'] =  metrics.dimensions.hostname;
+                  
+                  
+                  //calculate the week
+                  
+                  var year = new Date(timestamp.getFullYear(), 0, 1);
+                  var days = Math.floor((timestamp - year) / (24 * 60 * 60 * 1000));
+                  var week = Math.ceil(( timestamp.getDay() + 1 + days) / 7);
+                  //console.log(week);
+                
+                  var action = { "index": {} };
+                  indexName = [
+                  'aos' + metrics.namespace.toLowerCase().split('/').join('-') + '-metrics-'+metrics.metric_name.toLowerCase().split(" ").join("").split("/").join("")+'-' + timestamp.getUTCFullYear()
+                  ].join('.');
+                  indexName = indexName+'-'+week;
+                  //console.log(indexName);
+                  
+                  action.index._index = indexName;
+
+                  
+                  action.index._type = metrics.metric_name.split(" ").join("");
+                  action.index._id = logEvent.recordId+getRandomInt(999);
+                  
+                  bulkRequestBody += [
+                      JSON.stringify(action),
+                      JSON.stringify(source),
+                  ].join('\n') + '\n';
+                }catch (e)
+                {
+                console.log(e);
+                }
+              });
+                  
+                });
+              return bulkRequestBody;
+          }
+          function lines(text) {  
+            return text.split('\n');
+          }
+
+          function getRandomInt(max) {
+            return Math.floor(Math.random() * max);
+          }
+
+          function buildSource(message, extractedFields) {
+              if (extractedFields) {
+                  var source = {};
+
+                  for (var key in extractedFields) {
+                      if (extractedFields.hasOwnProperty(key) && extractedFields[key]) {
+                          var value = extractedFields[key];
+
+                          if (isNumeric(value)) {
+                              source[key] = 1 * value;
+                              continue;
+                          }
+
+                          var jsonSubString = extractJson(value);
+                          if (jsonSubString !== null) {
+                              source['$' + key] = JSON.parse(jsonSubString);
+                          }
+
+                          source[key] = value;
+                      }
+                  }
+                  return source;
+              }
+
+              var jsonSubString = extractJson(message);
+              if (jsonSubString !== null) {
+                  return JSON.parse(jsonSubString);
+              }
+
+              return {};
+          }
+
+          function extractJson(message) {
+              var jsonStart = message.indexOf('{');
+              if (jsonStart < 0) return null;
+              var jsonSubString = message.substring(jsonStart);
+              return isValidJson(jsonSubString) ? jsonSubString : null;
+          }
+
+          function isValidJson(message) {
+              try {
+                  JSON.parse(message);
+              } catch (e) { return false; }
+              return true;
+          }
+
+          function isNumeric(n) {
+              return !isNaN(parseFloat(n)) && isFinite(n);
+          }
+
+          function post(body, callback) {
+              var requestParams = buildRequest(endpoint, body);
+              console.log(body);
+
+              var request = https.request(requestParams, function(response) {
+                  var responseBody = '';
+                  response.on('data', function(chunk) {
+                      responseBody += chunk;
+                  });
+
+                  response.on('end', function() {
+                      var info = JSON.parse(responseBody);
+                      var failedItems;
+                      var success;
+                      var error;
+
+                      if (response.statusCode >= 200 && response.statusCode < 299) {
+                          failedItems = info.items.filter(function(x) {
+                              return x.index.status >= 300;
+                          });
+
+                          success = {
+                              "attemptedItems": info.items.length,
+                              "successfulItems": info.items.length - failedItems.length,
+                              "failedItems": failedItems.length
+                          };
+                      }
+
+                      if (response.statusCode !== 200 || info.errors === true) {
+                          // prevents logging of failed entries, but allows logging
+                          // of other errors such as access restrictions
+                          delete info.items;
+                          error = {
+                              statusCode: response.statusCode,
+                              responseBody: info
+                          };
+                      }
+
+                      callback(error, success, response.statusCode, failedItems);
+                  });
+              }).on('error', function(e) {
+                  callback(e);
+              });
+              request.end(requestParams.body);
+          }
+
+          function buildRequest(endpoint, body) {
+              var endpointParts = endpoint.match(/^([^\.]+)\.?([^\.]*)\.?([^\.]*)\.amazonaws\.com$/);
+              var region = endpointParts[2];
+              var service = endpointParts[3];
+              var datetime = (new Date()).toISOString().replace(/[:\-]|\.\d{3}/g, '');
+              var date = datetime.substr(0, 8);
+              var kDate = hmac('AWS4' + process.env.AWS_SECRET_ACCESS_KEY, date);
+              var kRegion = hmac(kDate, region);
+              var kService = hmac(kRegion, service);
+              var kSigning = hmac(kService, 'aws4_request');
+
+              var request = {
+                  host: endpoint,
+                  method: 'POST',
+                  path: '/_bulk',
+                  body: body,
+                  headers: {
+                      'Content-Type': 'application/json',
+                      'Host': endpoint,
+                      'Content-Length': Buffer.byteLength(body),
+                      'X-Amz-Security-Token': process.env.AWS_SESSION_TOKEN,
+                      'X-Amz-Date': datetime
+                  }
+              };
+
+              var canonicalHeaders = Object.keys(request.headers)
+                  .sort(function(a, b) { return a.toLowerCase() < b.toLowerCase() ? -1 : 1; })
+                  .map(function(k) { return k.toLowerCase() + ':' + request.headers[k]; })
+                  .join('\n');
+
+              var signedHeaders = Object.keys(request.headers)
+                  .map(function(k) { return k.toLowerCase(); })
+                  .sort()
+                  .join(';');
+
+              var canonicalString = [
+                  request.method,
+                  request.path, '',
+                  canonicalHeaders, '',
+                  signedHeaders,
+                  hash(request.body, 'hex'),
+              ].join('\n');
+
+              var credentialString = [ date, region, service, 'aws4_request' ].join('/');
+
+              var stringToSign = [
+                  'AWS4-HMAC-SHA256',
+                  datetime,
+                  credentialString,
+                  hash(canonicalString, 'hex')
+              ] .join('\n');
+
+              request.headers.Authorization = [
+                  'AWS4-HMAC-SHA256 Credential=' + process.env.AWS_ACCESS_KEY_ID + '/' + credentialString,
+                  'SignedHeaders=' + signedHeaders,
+                  'Signature=' + hmac(kSigning, stringToSign, 'hex')
+              ].join(', ');
+
+              return request;
+          }
+
+          function hmac(key, str, encoding) {
+              return crypto.createHmac('sha256', key).update(str, 'utf8').digest(encoding);
+          }
+
+          function hash(str, encoding) {
+              return crypto.createHash('sha256').update(str, 'utf8').digest(encoding);
+          }
+
+          function logFailure(error, failedItems) {
+              if (logFailedResponses) {
+                  console.log('Error: ' + JSON.stringify(error, null, 2));
+
+                  if (failedItems && failedItems.length > 0) {
+                      console.log("Failed Items: " +
+                          JSON.stringify(failedItems, null, 2));
+                  }
+              }
+          }
+      Description: This lambda function is responsible to send the metrics to Opensearch domain. 
+      FunctionName: AOS-CWMetricStream-aos
+      Handler: index.handler
+      PackageType: Zip
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs16.x
+      Timeout: 63
